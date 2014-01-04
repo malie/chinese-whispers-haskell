@@ -15,6 +15,8 @@ import Data.Tuple ( swap )
 import Control.Parallel.Strategies
 import Control.DeepSeq ( NFData, force, rnf )
 
+import Cwlib (buildNeighbors)
+
 mrlist :: NFData b => (a -> b) -> [a] -> [b]
 mrlist m xs =
   runEval $ do
@@ -31,7 +33,6 @@ xfoldl1 f (a:b:xs) = xfoldl1 f $ redu (a:b:xs)
   where redu (a:b:xs) = f a b : redu xs
         redu xs       = xs
 
-
 type TextChunks = [T.Text]
 
 bytestringChunksOf :: Int -> B.ByteString -> [B.ByteString]
@@ -40,7 +41,7 @@ bytestringChunksOf len bs
   | otherwise =
     let (a,b) = B.splitAt len bs
     in a : bytestringChunksOf len b
-  
+ 
 
 readFileIntoChunks filename =
   do c <- B.readFile filename
@@ -48,7 +49,6 @@ readFileIntoChunks filename =
      return $ mrlist E.decodeUtf8 cs
 
 shortenChunks sz chunks = map (T.take sz) chunks
-
 
 reportNumberOfSpacesAndNewlines chunks =
   do let numSpaces = mr (+) (T.count (T.pack " ")) chunks
@@ -79,7 +79,6 @@ wordsOfChunk chunk =
          then wc c start (succ pos)
          else subtext c start pos : nwc c pos
     subtext c start end = T.take (end-start) (T.drop start c)
-
 
 -- find all common words and all common ends
 
@@ -120,7 +119,7 @@ data Context = TwoLeftTwoRight T.Text T.Text T.Text T.Text
              deriving (Eq, Ord, Show)
 instance NFData Context where                      
   rnf (TwoLeftTwoRight x1 x2 x3 x4) = 
-    rnf x1 `seq` rnf x2 `seq` rnf x3 `seq` rnf x4           
+    rnf x1 `seq` rnf x2 `seq` rnf x3 `seq` rnf x4          
 
 -- | 'wordsInContext' extracts all words with some bits of context
 wordsInContext :: [T.Text] -> [T.Text] -> TextChunks -> M.Map Context (M.Map T.Text Int)
@@ -144,7 +143,6 @@ wordsInContext commonWords commonEnds chunks =
           ++ [T.empty]
         commonWordsSet = S.fromList commonWords
         commonEndsSet = S.fromList commonEnds
-
 
 printWordsInContext :: Int -> M.Map Context (M.Map T.Text Int) -> IO ()
 printWordsInContext n mapmap =
@@ -176,7 +174,6 @@ wordsConnectedByContext mapmap =
   , aword /= bword
   , let mcount = min acount bcount ]
 
-
 {-
 chineseWhisper :: M.Map (T.Text, T.Text) Int -> IO ()
 chineseWhisper connectedWords =
@@ -196,19 +193,35 @@ chineseWhisper connectedWords =
         allWords = map fst $ M.toList connections
 -}
            
-           
+chineseWhisper :: Int -> M.Map T.Text [(T.Text, Int)] -> M.Map T.Text T.Text
+chineseWhisper n graph = iterate n initial 
+    where initial = M.fromList [(k, k) | (k, _) <- M.toList graph]
+          majorClass :: [(T.Text, Int)] -> M.Map T.Text T.Text -> T.Text
+          majorClass nl m = 
+              fst $ L.last $ L.sortBy (comparing snd) $ 
+                  M.toList $ M.fromListWith (+) 
+                  [(m M.! nw, nc) | (nw, nc) <- nl] 
+          iterate n s | n == 0 = s
+                      | otherwise = iterate (n - 1) $ 
+                            M.fromList [(k, c) | 
+                                (k, _) <- M.toList s, 
+                                let c = majorClass (graph M.! k) s] 
+
 main =     
   do t1 <- readFileIntoChunks "input.txt"
-     let t = if True then t1 else shortenChunks 3000 t1
+     let t = if True then t1 else shortenChunks 30000 t1
      reportNumberOfSpacesAndNewlines t
      let ws = someCommonWords 200 t
      let cs = someCommonEnds 200 t
      let vs = wordsInContext ws cs t
      
-     printWordsInContext 100 vs
+     -- printWordsInContext 100 vs
      
      let connectedWords = wordsConnectedByContext vs
-     putStrLn "\nwords connected by context:"
-     mapM_ print $ largestMapValuesWithKeys 200000 connectedWords
+     -- putStrLn "\nwords connected by context:"
+     -- mapM_ print $ largestMapValuesWithKeys 200000 connectedWords
+     
+     -- putStrLn "\nneighbors:"
+     -- mapM_ print $ M.toList $ buildNeighbors connectedWords
 
-     -- chineseWhisper connectedWords
+     print $ chineseWhisper 10 $ buildNeighbors connectedWords
