@@ -1,0 +1,52 @@
+
+measure number of all class flips at each iteration
+  should decrease strongly after some iterations
+
+store word history classes?? which classes did it previously have?
+also count class flips to (a/the) previous class
+
+look at nodes randomly, in a random sequence
+
+don't schedule in parallel, but use new word classes as they become available
+
+only allow N words per class
+   (let N grow with number of iterations??)
+
+split graph into N chunks, process in parallel
+
+only change state with a certain probability(???)
+
+use all neighbours, also those with non-max weights  ???
+
+
+
+see words(ends?) that appear often together side-by-side as one word (thing?)
+should group: of the, from the, to the, can't, can not, cannot
+
+a simple variant of all words is: lowercase it
+
+
+use more contexts around
+   x x w x x
+   x x _ w x x
+   x x w _ x x
+   x x _ _ w x x
+   x x _ w _ x x
+   x x w _ _ x x
+
+   x w x x x
+   x w _ x x x
+   x _ w x x x
+   x w _ _ x x x
+   x _ w _ x x x
+   x _ _ w x x x
+
+maybe even
+esp. when the 'x's aren't that common
+   x w x
+   x w _ x
+   x _ w x
+   x w _ _ x
+   x _ w _ x
+   x _ _ w x
+
