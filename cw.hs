@@ -15,6 +15,8 @@ import Data.Tuple ( swap )
 import Control.Parallel.Strategies
 import Control.DeepSeq ( NFData, force, rnf )
 
+import qualified System.Random as R
+
 import Cwlib (buildNeighbors)
 
 mrlist :: NFData b => (a -> b) -> [a] -> [b]
@@ -174,42 +176,50 @@ wordsConnectedByContext mapmap =
   , aword /= bword
   , let mcount = min acount bcount ]
 
-{-
-chineseWhisper :: M.Map (T.Text, T.Text) Int -> IO ()
-chineseWhisper connectedWords =
-  do let stree = undefined
-     return ()
-  where connections =
-          M.unionsWith (M.unionWith (+))
-          [ M.singleton worda (M.singleton wordb count)
-          | ((worda, wordb), count) <- M.toList connectedWords ]
-          :: M.Map T.Text (M.Map T.Text Int)
-        probs = M.map buildProbs connections
-        buildProbs wordcountmap =
-          ...
-          L.sortBy (comparing fst) $
-          map swap $ M.toList wordcountmap
-          ...
-        allWords = map fst $ M.toList connections
--}
-           
-chineseWhisper :: Int -> M.Map T.Text [(T.Text, Int)] -> M.Map T.Text T.Text
+
+randomListElement :: [a] -> IO a
+randomListElement [] = error "empty list"
+randomListElement list = 
+  do i <- R.getStdRandom (R.randomR (0, length list-1))
+     return $ list !! i
+
+-- input is ordered, so max values are at start, choose some random maximum
+chooseSomeMaximumAtStart :: [(T.Text, Int)] -> IO T.Text
+chooseSomeMaximumAtStart ((t,a):(_,b):_) | b < a = return t
+chooseSomeMaximumAtStart ((t,a):xs) =
+  do let options = t : [ x | (x,v) <- xs, v == a ]
+         len = length options
+     randomListElement options
+
+-- assignment of word class to each word, primary chineseWhisper state
+type Assignment = M.Map T.Text T.Text
+
+
+chineseWhisper :: Int -> M.Map T.Text [(T.Text, Int)] -> IO Assignment
 chineseWhisper n graph = iterate n initial 
-    where initial = M.fromList [(k, k) | (k, _) <- M.toList graph]
-          majorClass :: [(T.Text, Int)] -> M.Map T.Text T.Text -> T.Text
-          majorClass nl m = 
-              fst $ L.last $ L.sortBy (comparing snd) $ 
-                  M.toList $ M.fromListWith (+) 
-                  [(m M.! nw, nc) | (nw, nc) <- nl] 
-          iterate n s | n == 0 = s
-                      | otherwise = iterate (n - 1) $ 
-                            M.fromList [(k, c) | 
-                                (k, _) <- M.toList s, 
-                                let c = majorClass (graph M.! k) s] 
+    where 
+      initial :: Assignment
+      initial = M.fromList [(k, k) | (k, _) <- M.toList graph]
+          
+      majorClass :: [(T.Text, Int)] -> Assignment -> IO T.Text
+      majorClass nl m = 
+        chooseSomeMaximumAtStart $
+        reverse $
+        L.sortBy (comparing snd) $ 
+        M.toList $ M.fromListWith (+) 
+        [(m M.! nw, nc) | (nw, nc) <- nl] 
+      iterate :: Int -> Assignment -> IO Assignment
+      iterate 0 s = return s
+      iterate n s = 
+        do xs <- mapM (\(k,_) ->
+                        do newclass <- majorClass (graph M.! k) s
+                           return (k, newclass))                       
+                 (M.toList s)
+           iterate (n - 1) $ M.fromList xs
 
 main =     
   do t1 <- readFileIntoChunks "input.txt"
-     let t = if True then t1 else shortenChunks 30000 t1
+     let t = if True then t1 else shortenChunks 100000 t1
      reportNumberOfSpacesAndNewlines t
      let ws = someCommonWords 200 t
      let cs = someCommonEnds 200 t
@@ -224,4 +234,10 @@ main =
      -- putStrLn "\nneighbors:"
      -- mapM_ print $ M.toList $ buildNeighbors connectedWords
 
-     print $ chineseWhisper 10 $ buildNeighbors connectedWords
+     res <- chineseWhisper 5 $ buildNeighbors connectedWords
+     sequence_
+       [ do putStrLn ("\n" ++ T.unpack wordclass ++ ":")
+            mapM_ print [ word 
+                        | (word, cl) <- M.toList res
+                        , cl == wordclass ]
+       | wordclass <- S.toList $ S.fromList $ map snd $ M.toList res ]
