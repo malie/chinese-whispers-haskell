@@ -211,11 +211,33 @@ chineseWhisper n graph = iterate n initial
       iterate :: Int -> Assignment -> IO Assignment
       iterate 0 s = return s
       iterate n s = 
-        do xs <- mapM (\(k,_) ->
+        do printAssignmentStats s
+           xs <- mapM (\(k,_) ->
                         do newclass <- majorClass (graph M.! k) s
                            return (k, newclass))                       
                  (M.toList s)
            iterate (n - 1) $ M.fromList xs
+
+someRandomListElements 0 _ = return []
+someRandomListElements _ [] = return []
+someRandomListElements n xs =
+  do el <- randomListElement xs
+     rest <- someRandomListElements (pred n) (L.delete el xs)
+     return $ el : rest
+
+printAssignmentStats :: Assignment -> IO ()
+printAssignmentStats s =
+  do putStrLn "stats"
+     let clusters = M.unionsWith (++) [ M.singleton c [w] | (w,c) <- M.toList s ] 
+         largestClusters = take 20 $ map snd $ reverse $ L.sortBy (comparing fst)
+                           [ (length words, x)
+                           | x@(_, words) <- M.toList clusters ]
+     sequence_
+       [ do xs <- someRandomListElements 7 words
+            print (c, length words, xs)
+       | (c, words) <- largestClusters ]
+
+    
 
 main =     
   do t1 <- readFileIntoChunks "input.txt"
