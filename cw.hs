@@ -118,10 +118,13 @@ largestMapValuesWithKeys n theMap =
   theMap
 
 data Context = TwoLeftTwoRight T.Text T.Text T.Text T.Text
+             | OneLeftOneRight T.Text T.Text
              deriving (Eq, Ord, Show)
 instance NFData Context where                      
   rnf (TwoLeftTwoRight x1 x2 x3 x4) = 
     rnf x1 `seq` rnf x2 `seq` rnf x3 `seq` rnf x4          
+  rnf (OneLeftOneRight x1 x2) = 
+    rnf x1 `seq` rnf x2
 
 -- | 'wordsInContext' extracts all words with some bits of context
 wordsInContext :: [T.Text] -> [T.Text] -> TextChunks -> M.Map Context (M.Map T.Text Int)
@@ -145,6 +148,7 @@ wordsInContext commonWords commonEnds chunks =
           ++ [T.empty]
         commonWordsSet = S.fromList commonWords
         commonEndsSet = S.fromList commonEnds
+
 
 printWordsInContext :: Int -> M.Map Context (M.Map T.Text Int) -> IO ()
 printWordsInContext n mapmap =
@@ -191,12 +195,15 @@ chooseSomeMaximumAtStart ((t,a):xs) =
          len = length options
      randomListElement options
 
--- assignment of word class to each word, primary chineseWhisper state
+-- input graph to chinese whispers, weigthed
+type Graph = M.Map T.Text [(T.Text, Int)]
+
+-- assignment of word class to each word, primary chineseWhispers state
 type Assignment = M.Map T.Text T.Text
 
 
-chineseWhisper :: Int -> M.Map T.Text [(T.Text, Int)] -> IO Assignment
-chineseWhisper n graph = iterate n initial 
+chineseWhispers :: Int -> Graph -> IO Assignment
+chineseWhispers n graph = iterate n initial 
     where 
       initial :: Assignment
       initial = M.fromList [(k, k) | (k, _) <- M.toList graph]
@@ -211,12 +218,23 @@ chineseWhisper n graph = iterate n initial
       iterate :: Int -> Assignment -> IO Assignment
       iterate 0 s = return s
       iterate n s = 
-        do printAssignmentStats s
-           xs <- mapM (\(k,_) ->
-                        do newclass <- majorClass (graph M.! k) s
+        do putStrLn $ "ITERATIONS " ++ show n
+           printAssignments 50 graph s
+           xs <- mapM (\(k, oc) ->
+                        do newclass <-
+                             chooseRandomly 0.9
+                               (majorClass (graph M.! k) s)
+                               (return oc)
                            return (k, newclass))                       
                  (M.toList s)
            iterate (n - 1) $ M.fromList xs
+
+chooseRandomly :: Float -> IO a -> IO a -> IO a
+chooseRandomly probability a b =
+  do i <- R.getStdRandom (R.randomR (0.0, 1.0))
+     if i < probability
+       then a
+       else b
 
 someRandomListElements 0 _ = return []
 someRandomListElements _ [] = return []
@@ -225,26 +243,58 @@ someRandomListElements n xs =
      rest <- someRandomListElements (pred n) (L.delete el xs)
      return $ el : rest
 
-printAssignmentStats :: Assignment -> IO ()
-printAssignmentStats s =
-  do putStrLn "stats"
+printAssignments :: Int -> Graph -> Assignment -> IO ()
+printAssignments n g s =
+  do putStrLn "\nstats"
      let clusters = M.unionsWith (++) [ M.singleton c [w] | (w,c) <- M.toList s ] 
-         largestClusters = take 20 $ map snd $ reverse $ L.sortBy (comparing fst)
+         largestClusters = take n $ map snd $ reverse $ L.sortBy (comparing fst)
                            [ (length words, x)
                            | x@(_, words) <- M.toList clusters ]
      sequence_
-       [ do xs <- someRandomListElements 7 words
-            print (c, length words, xs)
+       [ do let cwords = orderWordsByClosenessTo g c words
+            putStrLn $ T.unpack c ++ " -- " ++ show (length words) ++ " words"
+            putStrLn $ joinWords "    " $ take 100 cwords
        | (c, words) <- largestClusters ]
 
-    
+joinWords prefix words =
+  let (xs,ys) = L.splitAt 9 words
+  in prefix 
+     ++ L.intercalate " " (map T.unpack xs)
+     ++ if ys /= []
+        then "\n" ++ joinWords prefix ys
+        else ""
+
+splitAtHeadAndTail :: Int -> [a] -> ([a], [a], [a])
+splitAtHeadAndTail n list =
+  let (start, rest1) = L.splitAt n list
+      (end, rest) = L.splitAt n $ reverse rest1
+  in ( start
+     , reverse rest
+     , reverse end)
+
+orderWordsByClosenessTo :: Graph -> T.Text -> [T.Text] -> [T.Text]
+orderWordsByClosenessTo g centerWord clusterWords = 
+    map fst $ rec 30 [(centerWord, 1000000)]
+  where rec 0 ws = ws
+        rec n ws = reverse $
+                   L.sortBy (comparing snd) $
+                   M.toList $ M.fromListWith (+) $
+                   concat
+                     [ [(word, weight)]
+                       ++ [ (neighbour, nweight)
+                          | (neighbour, nweight) <- g M.! word
+                          , S.member neighbour clusterWordsSet ]
+                     | (word, weight) <- ws ]
+        clusterWordsSet = S.fromList clusterWords
+
+
 
 main =     
   do t1 <- readFileIntoChunks "input.txt"
      let t = if True then t1 else shortenChunks 100000 t1
      reportNumberOfSpacesAndNewlines t
-     let ws = someCommonWords 200 t
-     let cs = someCommonEnds 200 t
+     let ws = someCommonWords 400 t
+     let cs = someCommonEnds 400 t
      let vs = wordsInContext ws cs t
      
      -- printWordsInContext 100 vs
@@ -256,7 +306,7 @@ main =
      -- putStrLn "\nneighbors:"
      -- mapM_ print $ M.toList $ buildNeighbors connectedWords
 
-     res <- chineseWhisper 5 $ buildNeighbors connectedWords
+     res <- chineseWhispers 1000 $ buildNeighbors connectedWords
      sequence_
        [ do putStrLn ("\n" ++ T.unpack wordclass ++ ":")
             mapM_ print [ word 
