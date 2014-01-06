@@ -49,6 +49,7 @@ readFileIntoChunks filename =
   do c <- B.readFile filename
      let cs = bytestringChunksOf (1024*1024) c
      return $ mrlist E.decodeUtf8 cs
+     -- return $ mrlist E.decodeLatin1 cs
 
 shortenChunks sz chunks = map (T.take sz) chunks
 
@@ -119,12 +120,16 @@ largestMapValuesWithKeys n theMap =
 
 data Context = TwoLeftTwoRight T.Text T.Text T.Text T.Text
              | OneLeftOneRight T.Text Int Int T.Text
+             | CoOccurs T.Text Int
              deriving (Eq, Ord, Show)
+                      
 instance NFData Context where                      
   rnf (TwoLeftTwoRight x1 x2 x3 x4) = 
     rnf x1 `seq` rnf x2 `seq` rnf x3 `seq` rnf x4          
   rnf (OneLeftOneRight x1 x2 x3 x4) = 
     rnf x1 `seq` rnf x2 `seq` rnf x3 `seq` rnf x4          
+  rnf (CoOccurs x1 x2) = 
+    rnf x1 `seq` rnf x2
 
 -- | 'wordsInContext' extracts all words with some bits of context
 wordsInContext :: [T.Text] -> [T.Text] -> TextChunks -> M.Map Context (M.Map T.Text Int)
@@ -162,10 +167,29 @@ wordsInContext2 chunks = mr (M.unionWith (M.unionWith (+))) ex chunks
           M.fromListWith (M.unionWith (+))
           [ (OneLeftOneRight x ignLeft ignRight y, M.singleton w 1)
           | (x:xs) <- L.tails $ wordsOfChunk chunk
-          , ignLeft <- [0..2]
-          , ignRight <- [0..2]
+          , ignLeft <- [0..0]
+          , ignRight <- [0..0]
           , (w:ws) <- [drop ignLeft xs]
           , (y:_) <- [drop ignRight ws] ]
+
+wordsInContext3 :: TextChunks -> M.Map Context (M.Map T.Text Int)
+wordsInContext3 chunks =
+  mr (M.unionWith (M.unionWith (+))) ex chunks
+  where ex chunk =
+          M.fromListWith (M.unionWith (+)) $
+          concat $
+          [ [ (CoOccurs x (-1), M.singleton w 1)
+            , (CoOccurs w 1, M.singleton x 1) ]
+          | (x:xs) <- L.tails $ wordsOfChunk chunk
+          , ign <- [0..0]
+          , (w:_) <- [drop ign xs]]
+
+withCountGT lim mapmap =
+  M.fromList
+  [ (context, M.fromList [ (word, count)
+                         | (word, count) <- M.toList mp
+                         , count > lim ])
+  | (context, mp) <- M.toList mapmap ]
 
 
 printWordsInContext :: Int -> M.Map Context (M.Map T.Text Int) -> IO ()
@@ -187,6 +211,12 @@ printWordsInContext n mapmap =
        M.toList mapmap ]
   where printContext (TwoLeftTwoRight l2 l1 r1 r2) =
           do putStrLn $ L.intercalate "=" $ map (T.unpack) [l2, l1, r1, r2]
+        printContext (OneLeftOneRight l el er r) =
+          do putStrLn $ L.intercalate "=" 
+               [T.unpack l, show el, show er, T.unpack r]
+        printContext (CoOccurs x d) =
+          do putStrLn $ T.unpack x ++ show d
+
 
 wordsConnectedByContext :: M.Map Context (M.Map T.Text Int) -> M.Map (T.Text, T.Text) Int
 wordsConnectedByContext mapmap =
@@ -313,18 +343,22 @@ main =
      reportNumberOfSpacesAndNewlines t
      let ws = someCommonWords 100 t
      let cs = someCommonEnds 100 t
-     let vs = wordsInContext ws cs t
      
-     -- printWordsInContext 100 vs
+     let vs = 
+           withCountGT 7 $ wordsInContext ws cs t
+           -- withCountGT 10 $ wordsInContext2 t
+           -- withCountGT 7 $ wordsInContext3 t
+     
+     -- printWordsInContext 300 vs
      
      let connectedWords = wordsConnectedByContext vs
      -- putStrLn "\nwords connected by context:"
-     -- mapM_ print $ largestMapValuesWithKeys 200000 connectedWords
+     -- mapM_ print $ largestMapValuesWithKeys 200 connectedWords
      
      -- putStrLn "\nneighbors:"
      -- mapM_ print $ M.toList $ buildNeighbors connectedWords
 
-     res <- chineseWhispers 1000 $ buildNeighbors connectedWords
+     res <- chineseWhispers 50 $ buildNeighbors connectedWords
      sequence_
        [ do putStrLn ("\n" ++ T.unpack wordclass ++ ":")
             mapM_ print [ word 

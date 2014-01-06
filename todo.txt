@@ -1,4 +1,6 @@
 
+build a graph of only some N most common words
+
 print cluster size histogram after every iteration
 
 measure number of all class flips at each iteration
