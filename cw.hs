@@ -130,7 +130,7 @@ wordsInContext commonWords commonEnds chunks =
   where ex chunk = 
           let ws = wordsOfChunk chunk
               ends = map wordExtract ws :: [T.Text]
-          in M.fromList
+          in M.fromListWith (M.unionWith (+))
              [ (ctx, M.singleton word 1)
              | word <- tail $ tail $ ws
              | (l2:l1:_:r1:r2:_) <- L.tails ends
