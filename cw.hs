@@ -118,13 +118,13 @@ largestMapValuesWithKeys n theMap =
   theMap
 
 data Context = TwoLeftTwoRight T.Text T.Text T.Text T.Text
-             | OneLeftOneRight T.Text T.Text
+             | OneLeftOneRight T.Text Int Int T.Text
              deriving (Eq, Ord, Show)
 instance NFData Context where                      
   rnf (TwoLeftTwoRight x1 x2 x3 x4) = 
     rnf x1 `seq` rnf x2 `seq` rnf x3 `seq` rnf x4          
-  rnf (OneLeftOneRight x1 x2) = 
-    rnf x1 `seq` rnf x2
+  rnf (OneLeftOneRight x1 x2 x3 x4) = 
+    rnf x1 `seq` rnf x2 `seq` rnf x3 `seq` rnf x4          
 
 -- | 'wordsInContext' extracts all words with some bits of context
 wordsInContext :: [T.Text] -> [T.Text] -> TextChunks -> M.Map Context (M.Map T.Text Int)
@@ -148,6 +148,24 @@ wordsInContext commonWords commonEnds chunks =
           ++ [T.empty]
         commonWordsSet = S.fromList commonWords
         commonEndsSet = S.fromList commonEnds
+
+-- 'w' is the target word, 'x' and 'y' are context:
+-- x w y
+-- x w _ y
+-- x w _ _ y
+-- x _ w y
+-- x _ w _ y
+-- x _ w _ _ y
+wordsInContext2 :: TextChunks -> M.Map Context (M.Map T.Text Int)
+wordsInContext2 chunks = mr (M.unionWith (M.unionWith (+))) ex chunks
+  where ex chunk =
+          M.fromListWith (M.unionWith (+))
+          [ (OneLeftOneRight x ignLeft ignRight y, M.singleton w 1)
+          | (x:xs) <- L.tails $ wordsOfChunk chunk
+          , ignLeft <- [0..2]
+          , ignRight <- [0..2]
+          , (w:ws) <- [drop ignLeft xs]
+          , (y:_) <- [drop ignRight ws] ]
 
 
 printWordsInContext :: Int -> M.Map Context (M.Map T.Text Int) -> IO ()
@@ -293,8 +311,8 @@ main =
   do t1 <- readFileIntoChunks "input.txt"
      let t = if True then t1 else shortenChunks 100000 t1
      reportNumberOfSpacesAndNewlines t
-     let ws = someCommonWords 400 t
-     let cs = someCommonEnds 400 t
+     let ws = someCommonWords 100 t
+     let cs = someCommonEnds 100 t
      let vs = wordsInContext ws cs t
      
      -- printWordsInContext 100 vs
