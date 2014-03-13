@@ -1,4 +1,12 @@
 
+determine and print graph stats:
+  number of nodes
+  average number of connections
+  number of connections histogram
+  some nodes with most connections (these will be cluster formers)
+  some nodes with average connection count
+  some nodes with little connection count?
+
 build a graph of only some N most common words
 
 print cluster size histogram after every iteration
