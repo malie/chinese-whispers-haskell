@@ -522,14 +522,17 @@ printResult assignments =
 testCosineSimilarity =
   do t1 <- readFileIntoChunks "input.txt"
      putStrLn $ "number of text chunks:" ++ show (length t1)
-     let t = if False then t1 else shortenChunks 1000000 t1
+     let t = if False then t1 else shortenChunks 10000 t1
      reportNumberOfSpacesAndNewlines t
      let commonWords = someCommonWords 8000 t
      let veryCommonWords = take 2000 commonWords
      let targetWords =
-           S.difference
-           (S.fromList commonWords)
-           (S.fromList veryCommonWords)
+           if True
+           then S.fromList commonWords
+           else
+             S.difference
+             (S.fromList commonWords)
+             (S.fromList veryCommonWords)
      let featureWords = S.fromList veryCommonWords
      -- let commonEnds = someCommonEnds 100 t
      let wordOccurences = 
