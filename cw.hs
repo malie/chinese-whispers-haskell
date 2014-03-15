@@ -7,7 +7,7 @@ import qualified Data.Set as S
 import qualified Data.Text.Encoding as E
 import qualified Data.Text as T
 
-import Data.Char ( isAlphaNum , isDigit )
+import Data.Char ( isAlphaNum , isDigit , isPunctuation )
 import Data.Maybe ( catMaybes, isNothing, fromJust )
 import Data.Ord ( comparing )
 import Data.Tuple ( swap )
@@ -17,6 +17,7 @@ import Control.Parallel.Strategies
 import Control.DeepSeq ( NFData, force, rnf )
 
 import qualified System.Random as R
+import Debug.Trace ( trace )
 
 import Cwlib (buildNeighbors)
 
@@ -189,17 +190,28 @@ wordsInContext2 d chunks = mr (M.unionWith (M.unionWith (+))) ex chunks
           , (w:ws) <- [drop ignLeft xs]
           , (y:_) <- [drop ignRight ws] ]
 
-wordsInContext3 :: Int -> TextChunks -> M.Map Context (M.Map T.Text Int)
-wordsInContext3 maxdist chunks =
+wordsInContext3 :: Int -> S.Set T.Text -> S.Set T.Text -> TextChunks 
+                   -> M.Map Context (M.Map T.Text Int)
+wordsInContext3 maxdist featureWords interestingWords chunks =
   mr (M.unionWith (M.unionWith (+))) ex chunks
   where ex chunk =
           M.fromListWith (M.unionWith (+)) $
           concat $
-          [ [ (CoOccurs x (-ign-1), M.singleton w 1)
-            , (CoOccurs w (ign+1), M.singleton x 1) ]
+          [ (if S.member w interestingWords
+                && S.member x featureWords
+             then [ (CoOccurs x (-ign-1), M.singleton w 1)]
+             else [])
+            ++ (if S.member x interestingWords
+                   && S.member w featureWords
+                then [ (CoOccurs w (ign+1), M.singleton x 1) ]
+                else [])
           | (x:xs) <- L.tails $ wordsOfChunk chunk
           , ign <- [0..(maxdist-1)]
+          , not $ any isPunctuationWord $ take ign xs
           , (w:_) <- [drop ign xs]]
+
+isPunctuationWord w = T.length w == 1
+                      && isPunctuation (T.head w)
 
 withCountGT lim mapmap =
   M.fromList
@@ -212,8 +224,7 @@ withCountGT lim mapmap =
 printWordsInContext :: Int -> M.Map Context (M.Map T.Text Int) -> IO ()
 printWordsInContext n mapmap =
   sequence_
-  [ do print sum
-       printContext ctx
+  [ do print ("word in context:", contextToString ctx, "len:", sum)
        -- putStrLn $ T.unpack word
        -- mapM_ printContext (L.sortBy (comparing snd) $ M.toList ctxs)
        mapM_ print $
@@ -226,13 +237,23 @@ printWordsInContext n mapmap =
        L.sortBy (comparing fst) $
        map (\(k,v) -> (sum $ map snd $ M.toList v, (k,v))) $
        M.toList mapmap ]
-  where printContext (TwoLeftTwoRight l2 l1 r1 r2) =
-          do putStrLn $ L.intercalate "=" $ map (T.unpack) [l2, l1, r1, r2]
-        printContext (OneLeftOneRight l el er r) =
-          do putStrLn $ L.intercalate "=" 
-               [T.unpack l, show el, show er, T.unpack r]
-        printContext (CoOccurs x d) =
-          do putStrLn $ T.unpack x ++ show d
+  where contextToString (TwoLeftTwoRight l2 l1 r1 r2) =
+          L.intercalate "=" $ map (T.unpack) [l2, l1, r1, r2]
+        contextToString (OneLeftOneRight l el er r) =
+          L.intercalate "=" 
+          [T.unpack l, show el, show er, T.unpack r]
+        contextToString (CoOccurs x d) =
+          T.unpack x ++ show d
+
+contextWeight (TwoLeftTwoRight _ _ _ _) = 10
+contextWeight (OneLeftOneRight _ _ _ _) = 1
+contextWeight (CoOccurs _ x) = 
+  case abs x of
+    0 -> 100
+    1 -> 10
+    2 -> 3
+    _ -> 1
+    
 
 
 wordsConnectedByContext :: M.Map Context (M.Map T.Text Int)
@@ -240,7 +261,7 @@ wordsConnectedByContext :: M.Map Context (M.Map T.Text Int)
 wordsConnectedByContext mapmap =
   M.unionsWith (+)
   [ M.fromList $ 
-    -- take 5000 $
+    -- take 200 $
     reverse $
     L.sortBy (comparing snd) $ 
     M.toList $
@@ -248,25 +269,33 @@ wordsConnectedByContext mapmap =
     [ M.fromList [ ((aword,bword), mcount), ((bword,aword), mcount) ]
     | (aword, acount) <- wwc
     , (bword, bcount) <- wwc
-    , aword < bword
+    -- , acount > 20 && bcount > 10
+    , acount > bcount -- aword < bword
+    , acount <= 2*bcount
+    , bcount > 1
     , let mcount =
             -- round (1000 * sqrt (fromIntegral (acount * bcount))) -- +
             -- square (fromIntegral $ 10000 * (acount + bcount) `div` su) -- +
             -- (fromIntegral $ 10000 * (acount + bcount) `div` su)
             -- round ((fromIntegral $ 1000 * (acount + bcount) `div` su) ** 0.5)
+            -- round ((fromIntegral $ 1000 * (acount + bcount) `div` su) ** 2)
             -- 1 + round (log (fromIntegral $ (acount + bcount) `div` su) * 3) -- +
             -- min acount bcount
             -- max acount bcount
             -- acount * bcount
-            acount + bcount
+            -- acount + bcount
             -- 1000 * (acount * bcount) `div` (acount + bcount)
-            -- 1
+            1
+            * contextWeight context
     ]
   | (context, wordsWithCounts) <- M.toList mapmap
-  , let wwc = take 100 $ reverse $ L.sortBy (comparing snd) $ 
+  , let wwc = take 50 $ reverse $ L.sortBy (comparing snd) $ 
               M.toList wordsWithCounts
         su = sum $ map snd wwc
   ]
+
+-- maybe absolute probabilities of the individual words are useful here
+
 
 square x = x*x
 
@@ -278,7 +307,7 @@ randomListElement list =
      return $ list !! i
 
 -- input is ordered, so max values are at start, choose some random maximum
-chooseSomeMaximumAtStart :: [(T.Text, Int)] -> IO T.Text
+chooseSomeMaximumAtStart :: (Ord a) => [(T.Text, a)] -> IO T.Text
 chooseSomeMaximumAtStart ((t,a):(_,b):_) | b < a = return t
 chooseSomeMaximumAtStart ((t,a):xs) =
   do let options = t : [ x | (x,v) <- xs, v == a ]
@@ -287,19 +316,19 @@ chooseSomeMaximumAtStart ((t,a):xs) =
 chooseSomeMaximumAtStart [] = return $ T.pack "?"
 
 -- input graph to chinese whispers, weigthed
-type Graph = M.Map T.Text [(T.Text, Int)]
+type Graph a = M.Map T.Text [(T.Text, a)]
 
 -- assignment of word class to each word, primary chineseWhispers state
 type Assignment = M.Map T.Text T.Text
 
 
-chineseWhispers :: Int -> Graph -> IO Assignment
-chineseWhispers n graph = iterate n initial 
+chineseWhispers :: (Ord a, Num a) => Int -> Graph a -> IO Assignment
+chineseWhispers maxIterations graph = iterate 0 initial 
     where 
       initial :: Assignment
       initial = M.fromList [(k, k) | (k, _) <- M.toList graph]
           
-      majorClass :: Maybe [(T.Text, Int)] -> Assignment -> IO T.Text
+      -- majorClass :: Maybe [(T.Text, Int)] -> Assignment -> IO T.Text
       majorClass Nothing m = return $ T.pack "?"
       majorClass (Just nl) m = 
         chooseSomeMaximumAtStart $
@@ -310,10 +339,10 @@ chineseWhispers n graph = iterate n initial
         | (nw, nc) <- nl
         , Just nclas <- [M.lookup nw m]]
       iterate :: Int -> Assignment -> IO Assignment
-      iterate 0 s = return s
+      iterate n s | n == maxIterations = return s
       iterate n s = 
         do putStrLn $ "ITERATIONS " ++ show n
-           printAssignments 8 graph s
+           printAssignments 29 graph s
            xs <- mapM (\(k, oc) ->
                         do newclass <-
                              chooseRandomly 0.9
@@ -321,7 +350,7 @@ chineseWhispers n graph = iterate n initial
                                (return oc)
                            return (k, newclass))                       
                  (M.toList s)
-           iterate (n - 1) $ M.fromList xs
+           iterate (succ n) $ M.fromList xs
 
 chooseRandomly :: Float -> IO a -> IO a -> IO a
 chooseRandomly probability a b =
@@ -337,7 +366,7 @@ someRandomListElements n xs =
      rest <- someRandomListElements (pred n) (L.delete el xs)
      return $ el : rest
 
-printAssignments :: Int -> Graph -> Assignment -> IO ()
+printAssignments :: (Ord a, Num a) => Int -> Graph a -> Assignment -> IO ()
 printAssignments n g s =
   do putStrLn "\nstats"
      let clusters = M.unionsWith (++) [ M.singleton c [w] | (w,c) <- M.toList s ] 
@@ -347,11 +376,11 @@ printAssignments n g s =
      sequence_
        [ do let cwords = orderWordsByClosenessTo g c words
             putStrLn $ T.unpack c ++ " -- " ++ show (length words) ++ " words"
-            putStrLn $ joinWords "    " $ take 50 cwords
+            putStrLn $ joinWords "    " $ take 100 cwords
        | (c, words) <- largestClusters ]
 
 joinWords prefix words =
-  let (xs,ys) = L.splitAt 9 words
+  let (xs,ys) = L.splitAt 7 words
   in prefix 
      ++ L.intercalate " " (map T.unpack xs)
      ++ if ys /= []
@@ -366,7 +395,8 @@ splitAtHeadAndTail n list =
      , reverse rest
      , reverse end)
 
-orderWordsByClosenessTo :: Graph -> T.Text -> [T.Text] -> [T.Text]
+orderWordsByClosenessTo :: (Ord a, Num a) => 
+                           Graph a -> T.Text -> [T.Text] -> [T.Text]
 orderWordsByClosenessTo g centerWord clusterWords = 
     map fst $ rec 30 [(centerWord, 1000000)]
   where rec 0 ws = ws
@@ -393,35 +423,51 @@ joinCommonWords commonWords chunks = mr (++) join chunks
 
 
 
-findLargestClusters :: Assignment -> [T.Text]
-findLargestClusters assignment =
-  take 2 $
-  map fst $
-  reverse $
-  L.sortBy (comparing snd) $
+findToLargeClusters :: Int -> Assignment -> [T.Text]
+findToLargeClusters maxSize assignment =
+  -- take 2 $ map fst $ reverse $ L.sortBy (comparing snd) $
+  map fst $ filter (\ (cl, size) -> size > maxSize) $
   M.toList $
   M.fromListWith (+)
   [ (word, 1)
   | word <- map snd $ M.toList assignment ]
   
 
-dropSomeWords :: Float -> M.Map Context (M.Map T.Text Int)
+dropSomeWords :: Float -> [T.Text]
+                 -> M.Map Context (M.Map T.Text Int)
                  -> IO (M.Map Context (M.Map T.Text Int))
-dropSomeWords rate connectedWords =
+dropSomeWords rate largeClusters connectedWords =
   liftM M.fromList $ mapM dcontext $ M.toList connectedWords
   where dcontext (ctx, words) =
           do ws <- mapM dwords $ M.toList words
              return (ctx, M.fromList $ catMaybes ws)
-        dwords (word, count) =
-          chooseRandomly rate
-            (return Nothing)
-            (return $ Just (word, count))
+        lcSet = S.fromList largeClusters
+        dwords (word, count) 
+          | S.notMember word lcSet = 
+            return $ Just (word, count)
+          | otherwise =
+            chooseRandomly rate
+              (return Nothing)
+              (return $ Just (word, count))
+
+dropSomeWordsX :: Float -> M.Map Context (M.Map T.Text Int)
+                 -> IO (M.Map Context (M.Map T.Text Int))
+dropSomeWordsX rate connectedWords =
+  liftM M.fromList $ mapM dcontext $ M.toList connectedWords
+  where dcontext (ctx, words) =
+          do ws <- mapM dwords $ M.toList words
+             return (ctx, M.fromList $ catMaybes ws)
+        dwords (word, count) 
+          | otherwise =
+            chooseRandomly rate
+              (return Nothing)
+              (return $ Just (word, count))
 
 
 buildLexicalClusters =     
   do t1 <- readFileIntoChunks "input.txt"
      putStrLn $ "number of text chunks:" ++ show (length t1)
-     let t = if False then t1 else shortenChunks 800000 t1
+     let t = if False then t1 else shortenChunks 100000 t1
      reportNumberOfSpacesAndNewlines t
      let cs = someCommonEnds 300 t
      let commonWords = someCommonWords 10000 t
@@ -433,36 +479,147 @@ buildLexicalClusters =
            (S.fromList veryCommonWords)
            
      
-     let numIterations = 10
+     let numIterations = 50
          shrinkThenClusterAgain n vs1 assignment
            | n == numIterations = return assignment
            | otherwise =
-             do let largestClusters = findLargestClusters assignment
-                print ("largest clusters:", largestClusters)
-                vs2 <- dropSomeWords 0.1 vs1
+             do let largeClusters = findToLargeClusters 500 assignment
+                print ("large clusters:", largeClusters)
+                vs2 <- dropSomeWords 0.4 largeClusters vs1
                 let connectedWords = wordsConnectedByContext vs2
                 putStrLn $ "\n\nshrink iteration " ++ show n
-                res <- chineseWhispers 14 $
+                res <- chineseWhispers 20 $
                        buildNeighbors connectedWords
                 shrinkThenClusterAgain (succ n) vs2 res
 
-     let vs = wordsInContext interestingWords ws cs t
+     let -- vs = wordsInContext interestingWords ws cs t
+         featureWords = S.difference 
+                        (S.fromList $ drop 10 $ take 100 commonWords)
+                        (S.fromList $ map T.pack $ [".", ":", ","])
+         
+         vs = wordsInContext3 3 featureWords interestingWords t
+     -- vs <- dropSomeWordsX 0.92 vs0
+     -- printWordsInContext 100 vs
      let connectedWords = wordsConnectedByContext vs
-     res1 <- chineseWhispers 10 $ buildNeighbors connectedWords
+     res1 <- chineseWhispers 50 $ buildNeighbors connectedWords
 
-     res <- shrinkThenClusterAgain 0 vs res1
+     -- res <- shrinkThenClusterAgain 0 vs res1
+     let res = res1
      
      writeFile "lexical-new.txt" (show res)
+     
+
+printResult :: Assignment -> IO ()
+printResult assignments =
      sequence_
        [ do putStrLn ("\n" ++ T.unpack wordclass ++ ":")
             mapM_ print [ word 
-                        | (word, cl) <- M.toList res
+                        | (word, cl) <- M.toList assignments
                         , cl == wordclass ]
-       | wordclass <- S.toList $ S.fromList $ map snd $ M.toList res ]
+       | wordclass <- S.toList $ S.fromList $ map snd $ 
+                      M.toList assignments ]
 
+testCosineSimilarity =
+  do t1 <- readFileIntoChunks "input.txt"
+     putStrLn $ "number of text chunks:" ++ show (length t1)
+     let t = if False then t1 else shortenChunks 1000000 t1
+     reportNumberOfSpacesAndNewlines t
+     let commonWords = someCommonWords 8000 t
+     let veryCommonWords = take 2000 commonWords
+     let targetWords =
+           S.difference
+           (S.fromList commonWords)
+           (S.fromList veryCommonWords)
+     let featureWords = S.fromList veryCommonWords
+     -- let commonEnds = someCommonEnds 100 t
+     let wordOccurences = 
+           wordsInContext3 2 featureWords targetWords t
+           -- wordsInContext targetWords veryCommonWords commonEnds t
+           :: M.Map Context (M.Map T.Text Int)
+     -- printWordsInContext 1000 wordOccurences
+     let distributionalVectors = 
+           M.unionsWith M.union
+           [ M.singleton word $ M.singleton ctx count
+           | (ctx, wordmap) <- M.toList wordOccurences
+           , (word, count) <- M.toList wordmap ]
+     let cosineSimilarities =
+           catMaybes
+           [ let co = cosine afeatures bfeatures
+                 sim = oneDiv (1 - co) -- ** 3
+             in if sim > 2 -- 9
+                then Just ((a,b), sim)
+                else Nothing
+           | (a, afeatures) <- M.toList distributionalVectors
+           , (b, bfeatures) <- M.toList distributionalVectors
+           , a < b ]
+     -- mapM_ print $ L.sortBy (comparing snd) cosineSimilarities
+     putStrLn $ "number of edges: " ++ show (length cosineSimilarities)
+     let graph =
+           M.unionsWith (++)
+           [ M.fromList [ (a, [(b, s)])
+                        , (b, [(a, s)])]
+           | ((a,b), s) <- cosineSimilarities ]
+     res <- chineseWhispers 30 graph
+     printResult res
+     writeFile "lexical-new.txt" (show res)
+     
+
+
+cosine :: M.Map Context Int -> M.Map Context Int -> Double
+cosine a b = prod / len a / len b
+  where
+    prod = fromIntegral $ sum
+           [ a M.! feature * b M.! feature
+           | feature <- S.toList $ S.intersection (M.keysSet a) (M.keysSet b)]
+    len = sqrt . sum . map ((**2) . fromIntegral . snd) . M.toList
+
+
+oneDiv x | x < 1e-6 = 1e6
+         | otherwise = 1/x
+
+data XFeature = XF T.Text T.Text T.Text T.Text
+              | X2 T.Text T.Text
+                  deriving (Eq, Ord, Show)
+instance NFData XFeature where                      
+  rnf (XF x1 x2 x3 x4) = 
+    rnf x1 `seq` rnf x2 `seq` rnf x3 `seq` rnf x4
+  rnf (X2 x1 x2) = 
+    rnf x1 `seq` rnf x2
+
+testFindFeatures =
+  do chunks <- readFileIntoChunks "input.txt"
+     mapM_ print $ take 1000 $ findFeatures chunks
+     
+findFeatures :: TextChunks -> [(XFeature, Int)]
+findFeatures chunks =
+  reverse $ L.sortBy (comparing snd) $ 
+  M.toList $ M.map S.size $
+  mr (M.unionWith S.union) ex chunks
+  where ex chunk = chunkedBuildMapOfSets 1000
+                   --- [ (XF (we a) (we b) (we c) (we d), 1) 
+                   --- | (a:b:_:c:d:_) <- L.tails $ wordsOfChunk chunk ]
+                   [ (X2 a b, S.singleton c)
+                   | (a:c:b:_) <- L.tails $ wordsOfChunk chunk ]
+        we = T.reverse . T.take 2 . T.reverse
+
+
+chunkedBuildMapAdd n pairs = rec $ map M.fromList $ chunks pairs
+  where chunks [] = []
+        chunks list = let (a,b) = splitAt 5000 list
+                      in a : chunks b
+        rec = xfoldl1 (\a b-> lim (M.unionWith (+) a b))
+        lim = M.fromList . take n . reverse 
+              . L.sortBy (comparing snd) . M.toList
+
+chunkedBuildMapOfSets n pairs = rec $ map M.fromList $ chunks pairs
+  where chunks [] = []
+        chunks list = let (a,b) = splitAt 1000 list
+                      in a : chunks b
+        rec = xfoldl1 (\a b-> lim (M.unionWith S.union a b))
+        lim = M.fromList . take n . reverse 
+              . L.sortBy (comparing $ S.size . snd) . M.toList
 
 main =
-  buildLexicalClusters
-  -- buildVerbClusters
-  -- buildCommonSequences
-  
+  -- buildLexicalClusters
+  testCosineSimilarity
+  -- testFindFeatures

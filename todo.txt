@@ -1,3 +1,15 @@
+another try at balancing chinese whispers
+  cut centers:
+  cluster, extract some 100 center words of each cluster
+  cluster again, extract again
+  some clusters will be destroyed by the cutting...
+
+another try at getting smaller clusters from chinese whispers:
+  stop early!
+  clusters after two or three iterations seem nice and crisp
+
+
+
 
 determine and print graph stats:
   number of nodes
